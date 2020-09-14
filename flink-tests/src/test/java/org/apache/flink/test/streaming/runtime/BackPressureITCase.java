@@ -21,8 +21,9 @@ package org.apache.flink.test.streaming.runtime;
 
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.time.Deadline;
+import org.apache.flink.client.ClientUtils;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.configuration.NettyShuffleEnvironmentOptions;
+import org.apache.flink.configuration.MemorySize;
 import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.configuration.WebOptions;
 import org.apache.flink.runtime.dispatcher.DispatcherGateway;
@@ -91,11 +92,11 @@ public class BackPressureITCase extends TestLogger {
 		final Configuration configuration = new Configuration();
 
 		final int memorySegmentSizeKb = 32;
-		final String networkBuffersMemory = (memorySegmentSizeKb * NUM_TASKS) + "kb";
+		final MemorySize networkBuffersMemory = MemorySize.parse(memorySegmentSizeKb * 6 + "kb");
 
-		configuration.setString(TaskManagerOptions.MEMORY_SEGMENT_SIZE, memorySegmentSizeKb + "kb");
-		configuration.setString(NettyShuffleEnvironmentOptions.NETWORK_BUFFERS_MEMORY_MIN, networkBuffersMemory);
-		configuration.setString(NettyShuffleEnvironmentOptions.NETWORK_BUFFERS_MEMORY_MAX, networkBuffersMemory);
+		configuration.set(TaskManagerOptions.MEMORY_SEGMENT_SIZE, MemorySize.parse(memorySegmentSizeKb + "kb"));
+		configuration.set(TaskManagerOptions.NETWORK_MEMORY_MIN, networkBuffersMemory);
+		configuration.set(TaskManagerOptions.NETWORK_MEMORY_MAX, networkBuffersMemory);
 		return configuration;
 	}
 
@@ -118,6 +119,10 @@ public class BackPressureITCase extends TestLogger {
 		final JobVertex mapJobVertex = vertices.get(1);
 
 		testingMiniCluster.submitJob(jobGraph).get();
+		ClientUtils.waitUntilJobInitializationFinished(
+			() -> testingMiniCluster.getJobStatus(TEST_JOB_ID).get(),
+			() -> testingMiniCluster.requestJobResult(TEST_JOB_ID).get(),
+			ClassLoader.getSystemClassLoader());
 
 		assertJobVertexSubtasksAreBackPressured(mapJobVertex);
 		assertJobVertexSubtasksAreBackPressured(sourceJobVertex);

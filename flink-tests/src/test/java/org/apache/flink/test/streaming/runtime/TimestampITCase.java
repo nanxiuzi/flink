@@ -19,12 +19,14 @@
 package org.apache.flink.test.streaming.runtime;
 
 import org.apache.flink.api.common.JobID;
+import org.apache.flink.api.common.JobStatus;
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.functions.ReduceFunction;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.client.program.ClusterClient;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.MemorySize;
 import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.core.testutils.MultiShotLatch;
 import org.apache.flink.runtime.checkpoint.CheckpointException;
@@ -89,7 +91,7 @@ public class TimestampITCase extends TestLogger {
 
 	private static Configuration getConfiguration() {
 		Configuration config = new Configuration();
-		config.setString(TaskManagerOptions.MANAGED_MEMORY_SIZE, "12m");
+		config.set(TaskManagerOptions.MANAGED_MEMORY_SIZE, MemorySize.parse("12m"));
 		return config;
 	}
 
@@ -194,7 +196,7 @@ public class TimestampITCase extends TestLogger {
 					// send stop until the job is stopped
 					do {
 						try {
-							clusterClient.stopWithSavepoint(id, false, "test");
+							clusterClient.stopWithSavepoint(id, false, "test").get();
 						}
 						catch (Exception e) {
 							boolean ignoreException = ExceptionUtils.findThrowable(e, CheckpointException.class)
@@ -839,7 +841,7 @@ public class TimestampITCase extends TestLogger {
 	private static List<JobID> getRunningJobs(ClusterClient<?> client) throws Exception {
 		Collection<JobStatusMessage> statusMessages = client.listJobs().get();
 		return statusMessages.stream()
-			.filter(status -> !status.getJobState().isGloballyTerminalState())
+			.filter(status -> !status.getJobState().isGloballyTerminalState() && status.getJobState() != JobStatus.INITIALIZING)
 			.map(JobStatusMessage::getJobId)
 			.collect(Collectors.toList());
 	}

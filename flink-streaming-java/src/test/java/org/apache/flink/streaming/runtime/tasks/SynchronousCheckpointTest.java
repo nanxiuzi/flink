@@ -26,7 +26,7 @@ import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.operators.testutils.DummyEnvironment;
 import org.apache.flink.runtime.state.CheckpointStorageLocationReference;
 import org.apache.flink.streaming.runtime.tasks.StreamTaskTest.NoOpStreamTask;
-import org.apache.flink.streaming.runtime.tasks.mailbox.execution.DefaultActionContext;
+import org.apache.flink.streaming.runtime.tasks.mailbox.MailboxDefaultAction;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -62,8 +62,8 @@ public class SynchronousCheckpointTest {
 
 		taskInvocation = CompletableFuture.runAsync(
 			() -> {
-				streamTaskUnderTest = createTask(eventQueue);
 				try {
+					streamTaskUnderTest = createTask(eventQueue);
 					streamTaskUnderTest.invoke();
 				} catch (RuntimeException e) {
 					throw e;
@@ -133,7 +133,7 @@ public class SynchronousCheckpointTest {
 		}
 	}
 
-	private static StreamTaskUnderTest createTask(Queue<Event> eventQueue) {
+	private static StreamTaskUnderTest createTask(Queue<Event> eventQueue) throws Exception {
 		final DummyEnvironment environment = new DummyEnvironment("test", 1, 0);
 		return new StreamTaskUnderTest(environment, eventQueue);
 	}
@@ -145,7 +145,7 @@ public class SynchronousCheckpointTest {
 
 		StreamTaskUnderTest(
 				final Environment env,
-				Queue<Event> eventQueue) {
+				Queue<Event> eventQueue) throws Exception {
 			super(env);
 			this.eventQueue = checkNotNull(eventQueue);
 		}
@@ -156,9 +156,9 @@ public class SynchronousCheckpointTest {
 		}
 
 		@Override
-		protected void processInput(DefaultActionContext context) throws Exception {
+		protected void processInput(MailboxDefaultAction.Controller controller) throws Exception {
 			if (stopped || isCanceled()) {
-				context.allActionsCompleted();
+				controller.allActionsCompleted();
 			}
 		}
 

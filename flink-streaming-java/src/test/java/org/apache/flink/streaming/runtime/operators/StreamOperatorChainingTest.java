@@ -36,6 +36,7 @@ import org.apache.flink.streaming.api.operators.StreamMap;
 import org.apache.flink.streaming.api.operators.StreamOperator;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.tasks.OperatorChain;
+import org.apache.flink.streaming.runtime.tasks.StreamOperatorWrapper;
 import org.apache.flink.streaming.runtime.tasks.StreamTask;
 import org.apache.flink.streaming.util.MockStreamTaskBuilder;
 
@@ -131,12 +132,10 @@ public class StreamOperatorChainingTest {
 			StreamTask<Integer, StreamMap<Integer, Integer>> mockTask = createMockTask(streamConfig, environment);
 			OperatorChain<Integer, StreamMap<Integer, Integer>> operatorChain = createOperatorChain(streamConfig, environment, mockTask);
 
-			headOperator.setup(mockTask, streamConfig, operatorChain.getChainEntryPoint());
+			headOperator.setup(mockTask, streamConfig, operatorChain.getMainOperatorOutput());
 
-			for (StreamOperator<?> operator : operatorChain.getAllOperators()) {
-				if (operator != null) {
-					operator.open();
-				}
+			for (StreamOperatorWrapper<?, ?> operatorWrapper : operatorChain.getAllOperators(true)) {
+				operatorWrapper.getStreamOperator().open();
 			}
 
 			headOperator.processElement(new StreamRecord<>(1));
@@ -151,7 +150,7 @@ public class StreamOperatorChainingTest {
 	private MockEnvironment createMockEnvironment(String taskName) {
 		return new MockEnvironmentBuilder()
 			.setTaskName(taskName)
-			.setMemorySize(3 * 1024 * 1024)
+			.setManagedMemorySize(3 * 1024 * 1024)
 			.setInputSplitProvider(new MockInputSplitProvider())
 			.setBufferSize(1024)
 			.build();
@@ -252,12 +251,10 @@ public class StreamOperatorChainingTest {
 			StreamTask<Integer, StreamMap<Integer, Integer>> mockTask = createMockTask(streamConfig, environment);
 			OperatorChain<Integer, StreamMap<Integer, Integer>> operatorChain = createOperatorChain(streamConfig, environment, mockTask);
 
-			headOperator.setup(mockTask, streamConfig, operatorChain.getChainEntryPoint());
+			headOperator.setup(mockTask, streamConfig, operatorChain.getMainOperatorOutput());
 
-			for (StreamOperator<?> operator : operatorChain.getAllOperators()) {
-				if (operator != null) {
-					operator.open();
-				}
+			for (StreamOperatorWrapper<?, ?> operatorWrapper : operatorChain.getAllOperators(true)) {
+				operatorWrapper.getStreamOperator().open();
 			}
 
 			headOperator.processElement(new StreamRecord<>(1));
@@ -274,7 +271,7 @@ public class StreamOperatorChainingTest {
 			StreamConfig streamConfig,
 			Environment environment,
 			StreamTask<IN, OT> task) {
-		return new OperatorChain<>(task, StreamTask.createRecordWriters(streamConfig, environment));
+		return new OperatorChain<>(task, StreamTask.createRecordWriterDelegate(streamConfig, environment));
 	}
 
 	private <IN, OT extends StreamOperator<IN>> StreamTask<IN, OT> createMockTask(

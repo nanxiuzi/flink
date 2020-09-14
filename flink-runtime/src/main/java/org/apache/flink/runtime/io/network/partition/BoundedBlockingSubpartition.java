@@ -115,7 +115,7 @@ final class BoundedBlockingSubpartition extends ResultSubpartition {
 	}
 
 	@Override
-	public boolean add(BufferConsumer bufferConsumer) throws IOException {
+	public boolean add(BufferConsumer bufferConsumer, boolean isPriorityEvent) throws IOException {
 		if (isFinished()) {
 			bufferConsumer.close();
 			return false;
@@ -149,7 +149,15 @@ final class BoundedBlockingSubpartition extends ResultSubpartition {
 		try {
 			final Buffer buffer = bufferConsumer.build();
 			try {
-				data.writeBuffer(buffer);
+				if (canBeCompressed(buffer)) {
+					final Buffer compressedBuffer = parent.bufferCompressor.compressToIntermediateBuffer(buffer);
+					data.writeBuffer(compressedBuffer);
+					if (compressedBuffer != buffer) {
+						compressedBuffer.recycleBuffer();
+					}
+				} else {
+					data.writeBuffer(buffer);
+				}
 
 				numBuffersAndEventsWritten++;
 				if (buffer.isBuffer()) {
@@ -226,13 +234,6 @@ final class BoundedBlockingSubpartition extends ResultSubpartition {
 		if (readers.isEmpty()) {
 			data.close();
 		}
-	}
-
-	// ------------------------------ legacy ----------------------------------
-
-	@Override
-	public int releaseMemory() throws IOException {
-		return 0;
 	}
 
 	// ---------------------------- statistics --------------------------------

@@ -28,12 +28,13 @@ import org.apache.flink.util.function.SupplierWithException;
 
 import akka.dispatch.OnComplete;
 
-import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.List;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -55,7 +56,6 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 import scala.concurrent.Future;
-import scala.concurrent.duration.FiniteDuration;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
@@ -63,6 +63,32 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  * A collection of utilities that expand the usage of {@link CompletableFuture}.
  */
 public class FutureUtils {
+
+	private static final CompletableFuture<Void> COMPLETED_VOID_FUTURE = CompletableFuture.completedFuture(null);
+
+	/**
+	 * Returns a completed future of type {@link Void}.
+	 *
+	 * @return a completed future of type {@link Void}
+	 */
+	public static CompletableFuture<Void> completedVoidFuture() {
+		return COMPLETED_VOID_FUTURE;
+	}
+
+	/**
+	 * Fakes asynchronous execution by immediately executing the operation and completing the supplied future
+	 * either noramlly or exceptionally.
+	 *
+	 * @param operation to executed
+	 * @param <T> type of the result
+	 */
+	public static <T> void completeFromCallable(CompletableFuture<T> future, Callable<T> operation) {
+		try {
+			future.complete(operation.call());
+		} catch (Exception e) {
+			future.completeExceptionally(e);
+		}
+	}
 
 	// ------------------------------------------------------------------------
 	//  retrying operations
@@ -395,7 +421,21 @@ public class FutureUtils {
 	 * @return The timeout enriched future
 	 */
 	public static <T> CompletableFuture<T> orTimeout(CompletableFuture<T> future, long timeout, TimeUnit timeUnit) {
-		return orTimeout(future, timeout, timeUnit, Executors.directExecutor());
+		return orTimeout(future, timeout, timeUnit, Executors.directExecutor(), null);
+	}
+
+	/**
+	 * Times the given future out after the timeout.
+	 *
+	 * @param future to time out
+	 * @param timeout after which the given future is timed out
+	 * @param timeUnit time unit of the timeout
+	 * @param timeoutMsg timeout message for exception
+	 * @param <T> type of the given future
+	 * @return The timeout enriched future
+	 */
+	public static <T> CompletableFuture<T> orTimeout(CompletableFuture<T> future, long timeout, TimeUnit timeUnit, @Nullable String timeoutMsg) {
+		return orTimeout(future, timeout, timeUnit, Executors.directExecutor(), timeoutMsg);
 	}
 
 	/**
@@ -413,10 +453,30 @@ public class FutureUtils {
 		long timeout,
 		TimeUnit timeUnit,
 		Executor timeoutFailExecutor) {
+		return orTimeout(future, timeout, timeUnit, timeoutFailExecutor, null);
+	}
+
+	/**
+	 * Times the given future out after the timeout.
+	 *
+	 * @param future to time out
+	 * @param timeout after which the given future is timed out
+	 * @param timeUnit time unit of the timeout
+	 * @param timeoutFailExecutor executor that will complete the future exceptionally after the timeout is reached
+	 * @param timeoutMsg timeout message for exception
+	 * @param <T> type of the given future
+	 * @return The timeout enriched future
+	 */
+	public static <T> CompletableFuture<T> orTimeout(
+		CompletableFuture<T> future,
+		long timeout,
+		TimeUnit timeUnit,
+		Executor timeoutFailExecutor,
+		@Nullable String timeoutMsg) {
 
 		if (!future.isDone()) {
 			final ScheduledFuture<?> timeoutFuture = Delayer.delay(
-				() -> timeoutFailExecutor.execute(new Timeout(future)), timeout, timeUnit);
+				() -> timeoutFailExecutor.execute(new Timeout(future, timeoutMsg)), timeout, timeUnit);
 
 			future.whenComplete((T value, Throwable throwable) -> {
 				if (!timeoutFuture.isDone()) {
@@ -833,23 +893,13 @@ public class FutureUtils {
 	}
 
 	/**
-	 * Converts Flink time into a {@link FiniteDuration}.
+	 * Converts Flink time into a {@link Duration}.
 	 *
-	 * @param time to convert into a FiniteDuration
-	 * @return FiniteDuration with the length of the given time
+	 * @param time to convert into a Duration
+	 * @return Duration with the length of the given time
 	 */
-	public static FiniteDuration toFiniteDuration(Time time) {
-		return new FiniteDuration(time.toMilliseconds(), TimeUnit.MILLISECONDS);
-	}
-
-	/**
-	 * Converts {@link FiniteDuration} into Flink time.
-	 *
-	 * @param finiteDuration to convert into Flink time
-	 * @return Flink time with the length of the given finite duration
-	 */
-	public static Time toTime(FiniteDuration finiteDuration) {
-		return Time.milliseconds(finiteDuration.toMillis());
+	public static Duration toDuration(Time time) {
+		return Duration.ofMillis(time.toMilliseconds());
 	}
 
 	// ------------------------------------------------------------------------
@@ -986,19 +1036,40 @@ public class FutureUtils {
 	}
 
 	/**
+	 * Gets the result of a completable future without any exception thrown.
+	 *
+	 * @param future the completable future specified.
+	 * @param <T> the type of result
+	 * @return the result of completable future,
+	 * or null if it's unfinished or finished exceptionally
+	 */
+	@Nullable
+	public static <T> T getWithoutException(CompletableFuture<T> future) {
+		if (future.isDone() && !future.isCompletedExceptionally()) {
+			try {
+				return future.get();
+			} catch (InterruptedException | ExecutionException ignored) {
+			}
+		}
+		return null;
+	}
+
+	/**
 	 * Runnable to complete the given future with a {@link TimeoutException}.
 	 */
 	private static final class Timeout implements Runnable {
 
 		private final CompletableFuture<?> future;
+		private final String timeoutMsg;
 
-		private Timeout(CompletableFuture<?> future) {
+		private Timeout(CompletableFuture<?> future, @Nullable String timeoutMsg) {
 			this.future = checkNotNull(future);
+			this.timeoutMsg = timeoutMsg;
 		}
 
 		@Override
 		public void run() {
-			future.completeExceptionally(new TimeoutException());
+			future.completeExceptionally(new TimeoutException(timeoutMsg));
 		}
 	}
 
@@ -1055,25 +1126,49 @@ public class FutureUtils {
 	}
 
 	/**
-	 * Cancels all instances of {@link java.util.concurrent.Future} in the given list of runnables without interrupting.
-	 * This method will suppress unexpected exceptions until the whole list is processed and then rethrow.
+	 * Forwards the value from the source future to the target future.
 	 *
-	 * @param runnables list of {@link Runnable} candidates to cancel.
+	 * @param source future to forward the value from
+	 * @param target future to forward the value to
+	 * @param <T> type of the value
 	 */
-	public static void cancelRunnableFutures(@Nonnull List<Runnable> runnables) {
-		RuntimeException suppressedExceptions = null;
-		for (Runnable runnable : runnables) {
-			if (runnable instanceof java.util.concurrent.Future) {
-				try {
-					((java.util.concurrent.Future<?>) runnable).cancel(false);
-				} catch (RuntimeException ex) {
-					// safety net to ensure all candidates get cancelled before we let the exception bubble up.
-					suppressedExceptions = ExceptionUtils.firstOrSuppressed(ex, suppressedExceptions);
-				}
+	public static <T> void forward(CompletableFuture<T> source, CompletableFuture<T> target) {
+		source.whenComplete(forwardTo(target));
+	}
+
+	/**
+	 * Forwards the value from the source future to the target future using the provided executor.
+	 *
+	 * @param source future to forward the value from
+	 * @param target future to forward the value to
+	 * @param executor executor to forward the source value to the target future
+	 * @param <T> type of the value
+	 */
+	public static <T> void forwardAsync(CompletableFuture<T> source, CompletableFuture<T> target, Executor executor) {
+		source.whenCompleteAsync(
+			forwardTo(target),
+			executor);
+	}
+
+	/**
+	 * Throws the causing exception if the given future is completed exceptionally, otherwise do nothing.
+	 *
+	 * @param future the future to check.
+	 * @throws Exception when the future is completed exceptionally.
+	 */
+	public static void throwIfCompletedExceptionally(CompletableFuture<?> future) throws Exception {
+		if (future.isCompletedExceptionally()) {
+			future.get();
+		}
+	}
+
+	private static <T> BiConsumer<T, Throwable> forwardTo(CompletableFuture<T> target) {
+		return (value, throwable) -> {
+			if (throwable != null) {
+				target.completeExceptionally(throwable);
+			} else {
+				target.complete(value);
 			}
-		}
-		if (suppressedExceptions != null) {
-			throw suppressedExceptions;
-		}
+		};
 	}
 }

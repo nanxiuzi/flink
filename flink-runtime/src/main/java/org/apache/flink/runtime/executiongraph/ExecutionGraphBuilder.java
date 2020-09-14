@@ -18,6 +18,7 @@
 
 package org.apache.flink.runtime.executiongraph;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.time.Time;
 import org.apache.flink.configuration.CheckpointingOptions;
@@ -41,11 +42,10 @@ import org.apache.flink.runtime.executiongraph.failover.FailoverStrategyLoader;
 import org.apache.flink.runtime.executiongraph.failover.flip1.partitionrelease.PartitionReleaseStrategy;
 import org.apache.flink.runtime.executiongraph.failover.flip1.partitionrelease.PartitionReleaseStrategyFactoryLoader;
 import org.apache.flink.runtime.executiongraph.metrics.DownTimeGauge;
-import org.apache.flink.runtime.executiongraph.metrics.NumberOfFullRestartsGauge;
 import org.apache.flink.runtime.executiongraph.metrics.RestartTimeGauge;
 import org.apache.flink.runtime.executiongraph.metrics.UpTimeGauge;
 import org.apache.flink.runtime.executiongraph.restart.RestartStrategy;
-import org.apache.flink.runtime.io.network.partition.PartitionTracker;
+import org.apache.flink.runtime.io.network.partition.JobMasterPartitionTracker;
 import org.apache.flink.runtime.jobgraph.JobGraph;
 import org.apache.flink.runtime.jobgraph.JobVertex;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
@@ -82,6 +82,7 @@ public class ExecutionGraphBuilder {
 	 * If a prior execution graph exists, the JobGraph will be attached. If no prior execution
 	 * graph exists, then the JobGraph will become attach to a new empty execution graph.
 	 */
+	@VisibleForTesting
 	public static ExecutionGraph buildGraph(
 			@Nullable ExecutionGraph prior,
 			JobGraph jobGraph,
@@ -98,7 +99,7 @@ public class ExecutionGraphBuilder {
 			Time allocationTimeout,
 			Logger log,
 			ShuffleMaster<?> shuffleMaster,
-			PartitionTracker partitionTracker) throws JobExecutionException, JobException {
+			JobMasterPartitionTracker partitionTracker) throws JobExecutionException, JobException {
 
 		final FailoverStrategy.Factory failoverStrategy =
 			FailoverStrategyLoader.loadFailoverStrategy(jobManagerConfig, log);
@@ -120,7 +121,9 @@ public class ExecutionGraphBuilder {
 			log,
 			shuffleMaster,
 			partitionTracker,
-			failoverStrategy);
+			failoverStrategy,
+			NoOpExecutionDeploymentListener.get(),
+			(execution, newState) -> {});
 	}
 
 	public static ExecutionGraph buildGraph(
@@ -139,8 +142,10 @@ public class ExecutionGraphBuilder {
 		Time allocationTimeout,
 		Logger log,
 		ShuffleMaster<?> shuffleMaster,
-		PartitionTracker partitionTracker,
-		FailoverStrategy.Factory failoverStrategyFactory) throws JobExecutionException, JobException {
+		JobMasterPartitionTracker partitionTracker,
+		FailoverStrategy.Factory failoverStrategyFactory,
+		ExecutionDeploymentListener executionDeploymentListener,
+		ExecutionStateUpdateListener executionStateUpdateListener) throws JobExecutionException, JobException {
 
 		checkNotNull(jobGraph, "job graph cannot be null");
 
@@ -181,7 +186,8 @@ public class ExecutionGraphBuilder {
 					shuffleMaster,
 					partitionTracker,
 					jobGraph.getScheduleMode(),
-					jobGraph.getAllowQueuedScheduling());
+					executionDeploymentListener,
+					executionStateUpdateListener);
 		} catch (IOException e) {
 			throw new JobException("Could not create the ExecutionGraph.", e);
 		}
@@ -354,7 +360,6 @@ public class ExecutionGraphBuilder {
 		metrics.gauge(RestartTimeGauge.METRIC_NAME, new RestartTimeGauge(executionGraph));
 		metrics.gauge(DownTimeGauge.METRIC_NAME, new DownTimeGauge(executionGraph));
 		metrics.gauge(UpTimeGauge.METRIC_NAME, new UpTimeGauge(executionGraph));
-		metrics.gauge(NumberOfFullRestartsGauge.METRIC_NAME, new NumberOfFullRestartsGauge(executionGraph));
 
 		executionGraph.getFailoverStrategy().registerMetrics(metrics);
 

@@ -22,6 +22,7 @@ import org.apache.flink.runtime.executiongraph.IntermediateResultPartition;
 import org.apache.flink.runtime.io.network.api.writer.ResultPartitionWriter;
 import org.apache.flink.runtime.io.network.buffer.Buffer;
 import org.apache.flink.runtime.io.network.buffer.BufferBuilder;
+import org.apache.flink.runtime.io.network.buffer.BufferCompressor;
 import org.apache.flink.runtime.io.network.buffer.BufferConsumer;
 import org.apache.flink.runtime.io.network.buffer.BufferPool;
 import org.apache.flink.runtime.io.network.buffer.BufferPoolOwner;
@@ -29,6 +30,7 @@ import org.apache.flink.runtime.io.network.partition.consumer.LocalInputChannel;
 import org.apache.flink.runtime.io.network.partition.consumer.RemoteInputChannel;
 import org.apache.flink.runtime.jobgraph.DistributionPattern;
 import org.apache.flink.runtime.taskexecutor.TaskExecutor;
+import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.function.FunctionWithException;
 
 import org.slf4j.Logger;
@@ -37,6 +39,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.flink.util.Preconditions.checkArgument;
@@ -68,11 +71,13 @@ import static org.apache.flink.util.Preconditions.checkState;
  *
  * <h2>State management</h2>
  */
-public class ResultPartition implements ResultPartitionWriter, BufferPoolOwner {
+public abstract class ResultPartition implements ResultPartitionWriter, BufferPoolOwner {
 
 	protected static final Logger LOG = LoggerFactory.getLogger(ResultPartition.class);
 
 	private final String owningTaskName;
+
+	private final int partitionIndex;
 
 	protected final ResultPartitionID partitionId;
 
@@ -84,7 +89,7 @@ public class ResultPartition implements ResultPartitionWriter, BufferPoolOwner {
 
 	protected final ResultPartitionManager partitionManager;
 
-	public final int numTargetKeyGroups;
+	private final int numTargetKeyGroups;
 
 	// - Runtime state --------------------------------------------------------
 
@@ -98,21 +103,30 @@ public class ResultPartition implements ResultPartitionWriter, BufferPoolOwner {
 
 	private final FunctionWithException<BufferPoolOwner, BufferPool, IOException> bufferPoolFactory;
 
+	/** Used to compress buffer to reduce IO. */
+	@Nullable
+	protected final BufferCompressor bufferCompressor;
+
 	public ResultPartition(
 		String owningTaskName,
+		int partitionIndex,
 		ResultPartitionID partitionId,
 		ResultPartitionType partitionType,
 		ResultSubpartition[] subpartitions,
 		int numTargetKeyGroups,
 		ResultPartitionManager partitionManager,
+		@Nullable BufferCompressor bufferCompressor,
 		FunctionWithException<BufferPoolOwner, BufferPool, IOException> bufferPoolFactory) {
 
 		this.owningTaskName = checkNotNull(owningTaskName);
+		Preconditions.checkArgument(0 <= partitionIndex, "The partition index must be positive.");
+		this.partitionIndex = partitionIndex;
 		this.partitionId = checkNotNull(partitionId);
 		this.partitionType = checkNotNull(partitionType);
 		this.subpartitions = checkNotNull(subpartitions);
 		this.numTargetKeyGroups = numTargetKeyGroups;
 		this.partitionManager = checkNotNull(partitionManager);
+		this.bufferCompressor = bufferCompressor;
 		this.bufferPoolFactory = bufferPoolFactory;
 	}
 
@@ -142,6 +156,10 @@ public class ResultPartition implements ResultPartitionWriter, BufferPoolOwner {
 
 	public ResultPartitionID getPartitionId() {
 		return partitionId;
+	}
+
+	public int getPartitionIndex() {
+		return partitionIndex;
 	}
 
 	@Override
@@ -175,14 +193,23 @@ public class ResultPartition implements ResultPartitionWriter, BufferPoolOwner {
 	// ------------------------------------------------------------------------
 
 	@Override
-	public BufferBuilder getBufferBuilder() throws IOException, InterruptedException {
+	public BufferBuilder getBufferBuilder(int targetChannel) throws IOException, InterruptedException {
 		checkInProduceState();
 
-		return bufferPool.requestBufferBuilderBlocking();
+		return bufferPool.requestBufferBuilderBlocking(targetChannel);
 	}
 
 	@Override
-	public boolean addBufferConsumer(BufferConsumer bufferConsumer, int subpartitionIndex) throws IOException {
+	public BufferBuilder tryGetBufferBuilder(int targetChannel) throws IOException {
+		BufferBuilder bufferBuilder = bufferPool.requestBufferBuilder(targetChannel);
+		return bufferBuilder;
+	}
+
+	@Override
+	public boolean addBufferConsumer(
+			BufferConsumer bufferConsumer,
+			int subpartitionIndex,
+			boolean isPriorityEvent) throws IOException {
 		checkNotNull(bufferConsumer);
 
 		ResultSubpartition subpartition;
@@ -195,7 +222,7 @@ public class ResultPartition implements ResultPartitionWriter, BufferPoolOwner {
 			throw ex;
 		}
 
-		return subpartition.add(bufferConsumer);
+		return subpartition.add(bufferConsumer, isPriorityEvent);
 	}
 
 	@Override
@@ -272,6 +299,7 @@ public class ResultPartition implements ResultPartitionWriter, BufferPoolOwner {
 	/**
 	 * Returns the requested subpartition.
 	 */
+	@Override
 	public ResultSubpartitionView createSubpartitionView(int index, BufferAvailabilityListener availabilityListener) throws IOException {
 		checkElementIndex(index, subpartitions.length, "Subpartition not found.");
 		checkState(!isReleased.get(), "Partition released.");
@@ -300,16 +328,7 @@ public class ResultPartition implements ResultPartitionWriter, BufferPoolOwner {
 	 */
 	@Override
 	public void releaseMemory(int toRelease) throws IOException {
-		checkArgument(toRelease > 0);
-
-		for (ResultSubpartition subpartition : subpartitions) {
-			toRelease -= subpartition.releaseMemory();
-
-			// Only release as much memory as needed
-			if (toRelease <= 0) {
-				break;
-			}
-		}
+		// default behavior is nothing to release
 	}
 
 	/**
@@ -320,6 +339,11 @@ public class ResultPartition implements ResultPartitionWriter, BufferPoolOwner {
 	 */
 	public boolean isReleased() {
 		return isReleased.get();
+	}
+
+	@Override
+	public CompletableFuture<?> getAvailableFuture() {
+		return bufferPool.getAvailableFuture();
 	}
 
 	@Override

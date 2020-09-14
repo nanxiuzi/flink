@@ -15,17 +15,15 @@
 #  See the License for the specific language governing permissions and
 # limitations under the License.
 ################################################################################
-import sys
+import datetime
 
 from py4j.compat import long
 
-from pyflink.common import Configuration, SqlDialect
+from pyflink.common.configuration import Configuration
 from pyflink.java_gateway import get_gateway
+from pyflink.table.sql_dialect import SqlDialect
 
 __all__ = ['TableConfig']
-
-if sys.version > '3':
-    unicode = str
 
 
 class TableConfig(object):
@@ -69,7 +67,7 @@ class TableConfig(object):
                             such as "America/Los_Angeles", or a custom timezone_id such as
                             "GMT-8:00".
         """
-        if timezone_id is not None and isinstance(timezone_id, (str, unicode)):
+        if timezone_id is not None and isinstance(timezone_id, str):
             j_timezone = get_gateway().jvm.java.time.ZoneId.of(timezone_id)
             self._j_table_config.setLocalTimeZone(j_timezone)
         else:
@@ -135,6 +133,11 @@ class TableConfig(object):
             larger differences of minTime and maxTime. The difference between minTime and maxTime
             must be at least 5 minutes.
 
+            Method set_idle_state_retention_time is deprecated now. The suggested way to set idle
+            state retention time is :func:`~pyflink.table.TableConfig.set_idle_state_retention`
+            Currently, setting max_time will not work and the max_time is directly derived from the
+            min_time as 1.5 x min_time.
+
         :param min_time: The minimum time interval for which idle state is retained. Set to
                          0 (zero) to never clean-up the state.
         :type min_time: datetime.timedelta
@@ -148,9 +151,49 @@ class TableConfig(object):
         j_max_time = j_time_class.milliseconds(long(round(max_time.total_seconds() * 1000)))
         self._j_table_config.setIdleStateRetentionTime(j_min_time, j_max_time)
 
+    def set_idle_state_retention(self, duration):
+        """
+        Specifies a retention time interval for how long idle state, i.e., state which
+        was not updated, will be retained.
+
+        State will never be cleared until it was idle for less than the duration and will never
+        be kept if it was idle for more than the 1.5 x duration.
+
+        When new data arrives for previously cleaned-up state, the new data will be handled as if it
+        was the first data. This can result in previous results being overwritten.
+
+        Set to 0 (zero) to never clean-up the state.
+
+        Example:
+        ::
+
+            >>> table_config = TableConfig() \\
+            ...     .set_idle_state_retention(datetime.timedelta(days=1))
+
+        .. note::
+
+            Cleaning up state requires additional bookkeeping which becomes less expensive for
+            larger differences of minTime and maxTime. The difference between minTime and maxTime
+            must be at least 5 minutes.
+
+        :param duration: The retention time interval for which idle state is retained. Set to
+                         0 (zero) to never clean-up the state.
+        :type: duration: datetime.timedelta
+        """
+        j_duration_class = get_gateway().jvm.java.time.Duration
+        j_duration = j_duration_class.ofMillis(long(round(duration.total_seconds() * 1000)))
+        self._j_table_config.setIdleStateRetention(j_duration)
+
     def get_min_idle_state_retention_time(self):
         """
         State might be cleared and removed if it was not updated for the defined period of time.
+
+        .. note::
+
+            Currently the concept of min/max idle state retention has been deprecated and only
+            idle state retention time is supported. The min idle state retention is regarded as
+            idle state retention and the max idle state retention is derived from idle state
+            retention as 1.5 x idle state retention.
 
         :return: The minimum time until state which was not updated will be retained.
         :rtype: int
@@ -161,10 +204,26 @@ class TableConfig(object):
         """
         State will be cleared and removed if it was not updated for the defined period of time.
 
+        .. note::
+
+            Currently the concept of min/max idle state retention has been deprecated and only
+            idle state retention time is supported. The min idle state retention is regarded as
+            idle state retention and the max idle state retention is derived from idle state
+            retention as 1.5 x idle state retention.
+
         :return: The maximum time until state which was not updated will be retained.
         :rtype: int
         """
         return self._j_table_config.getMaxIdleStateRetentionTime()
+
+    def get_idle_state_retention(self):
+        """
+
+        :return: The duration until state which was not updated will be retained.
+        :return: datetime.timedelta
+        """
+        return datetime.timedelta(
+            milliseconds=self._j_table_config.getIdleStateRetention().toMillis())
 
     def set_decimal_context(self, precision, rounding_mode):
         """
@@ -277,6 +336,59 @@ class TableConfig(object):
         :type sql_dialect: SqlDialect
         """
         self._j_table_config.setSqlDialect(SqlDialect._to_j_sql_dialect(sql_dialect))
+
+    def set_python_executable(self, python_exec):
+        """
+        Sets the path of the python interpreter which is used to execute the python udf workers.
+
+        e.g. "/usr/local/bin/python3".
+
+        If python UDF depends on a specific python version which does not exist in the cluster,
+        the method :func:`pyflink.table.TableEnvironment.add_python_archive` can be used to upload
+        a virtual environment. The path of the python interpreter contained in the uploaded
+        environment can be specified via this method.
+
+        Example:
+        ::
+
+            # command executed in shell
+            # assume that the relative path of python interpreter is py_env/bin/python
+            $ zip -r py_env.zip py_env
+
+            # python code
+            >>> table_env.add_python_archive("py_env.zip")
+            >>> table_env.get_config().set_python_executable("py_env.zip/py_env/bin/python")
+
+        .. note::
+
+            Please make sure the uploaded python environment matches the platform that the cluster
+            is running on and that the python version must be 3.5 or higher.
+
+        .. note::
+
+            The python udf worker depends on Apache Beam (version == 2.23.0).
+            Please ensure that the specified environment meets the above requirements.
+
+        :param python_exec: The path of python interpreter.
+        :type python_exec: str
+
+        .. versionadded:: 1.10.0
+        """
+        jvm = get_gateway().jvm
+        self.get_configuration().set_string(jvm.PythonOptions.PYTHON_EXECUTABLE.key(), python_exec)
+
+    def get_python_executable(self):
+        """
+        Gets the path of the python interpreter which is used to execute the python udf workers.
+        If no path is specified before, it will return a None value.
+
+        :return: The path of the python interpreter which is used to execute the python udf workers.
+        :rtype: str
+
+        .. versionadded:: 1.10.0
+        """
+        jvm = get_gateway().jvm
+        return self.get_configuration().get_string(jvm.PythonOptions.PYTHON_EXECUTABLE.key(), None)
 
     @staticmethod
     def get_default():

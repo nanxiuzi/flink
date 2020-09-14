@@ -19,6 +19,7 @@
 package org.apache.flink.table.dataview;
 
 import org.apache.flink.annotation.Internal;
+import org.apache.flink.api.common.typeutils.SimpleTypeSerializerSnapshot;
 import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
 import org.apache.flink.api.common.typeutils.base.TypeSerializerSingleton;
 import org.apache.flink.core.memory.DataInputView;
@@ -31,7 +32,15 @@ import java.io.IOException;
  */
 @Internal
 public class NullSerializer extends TypeSerializerSingleton<Object> {
+
+	// TODO move this class to org.apache.flink.table.runtime.typeutils
+	//  after we dropped the legacy ListView/MapView logic
+
 	private static final long serialVersionUID = -5381596724707742625L;
+
+	public static final NullSerializer INSTANCE = new NullSerializer();
+
+	private NullSerializer() {}
 
 	@Override
 	public boolean isImmutableType() {
@@ -55,7 +64,7 @@ public class NullSerializer extends TypeSerializerSingleton<Object> {
 
 	@Override
 	public int getLength() {
-		return 0;
+		return 1;
 	}
 
 	@Override
@@ -71,16 +80,27 @@ public class NullSerializer extends TypeSerializerSingleton<Object> {
 
 	@Override
 	public Object deserialize(Object reuse, DataInputView source) throws IOException {
+		source.readByte();
 		return null;
 	}
 
 	@Override
 	public void copy(DataInputView source, DataOutputView target) throws IOException {
-
+		target.writeByte(source.readByte());
 	}
 
 	@Override
 	public TypeSerializerSnapshot<Object> snapshotConfiguration() {
-		throw new UnsupportedOperationException();
+		return new NullSerializerSnapshot();
+	}
+
+	/**
+	 * Serializer configuration snapshot for compatibility and format evolution.
+	 */
+	@SuppressWarnings("WeakerAccess")
+	public static final class NullSerializerSnapshot extends SimpleTypeSerializerSnapshot<Object> {
+		public NullSerializerSnapshot() {
+			super(() -> NullSerializer.INSTANCE);
+		}
 	}
 }

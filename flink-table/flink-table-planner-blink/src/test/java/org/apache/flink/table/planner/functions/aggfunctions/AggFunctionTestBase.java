@@ -21,8 +21,6 @@ package org.apache.flink.table.planner.functions.aggfunctions;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.functions.AggregateFunction;
-import org.apache.flink.table.planner.functions.aggfunctions.MaxWithRetractAggFunction.MaxWithRetractAccumulator;
-import org.apache.flink.table.planner.functions.aggfunctions.MinWithRetractAggFunction.MinWithRetractAccumulator;
 import org.apache.flink.table.planner.functions.utils.UserDefinedFunctionUtils;
 import org.apache.flink.util.Preconditions;
 
@@ -30,7 +28,6 @@ import org.junit.Test;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -89,8 +86,8 @@ public abstract class AggFunctionTestBase<T, ACC> {
 	}
 
 	@Test
-	public void testAggregateWithMerge() throws NoSuchMethodException, InvocationTargetException,
-			IllegalAccessException {
+	public void testAggregateWithMerge()
+			throws NoSuchMethodException, InvocationTargetException, IllegalAccessException {
 		AggregateFunction<T, ACC> aggregator = getAggregator();
 		if (UserDefinedFunctionUtils.ifMethodExistInFunction("merge", aggregator)) {
 			Method mergeFunc = aggregator.getClass().getMethod("merge", getAccClass(), Iterable.class);
@@ -112,7 +109,7 @@ public abstract class AggFunctionTestBase<T, ACC> {
 
 				ACC acc = accumulateValues(firstValues);
 
-				mergeFunc.invoke(aggregator, (Object) acc, accumulators);
+				mergeFunc.invoke(aggregator, acc, accumulators);
 
 				T result = aggregator.getValue(acc);
 				validateResult(expected, result);
@@ -135,7 +132,7 @@ public abstract class AggFunctionTestBase<T, ACC> {
 				accumulators.add(aggregator.createAccumulator());
 
 				ACC acc = accumulateValues(inputValues);
-				mergeFunc.invoke(aggregator, (Object) acc, accumulators);
+				mergeFunc.invoke(aggregator, acc, accumulators);
 
 				T result = aggregator.getValue(acc);
 				validateResult(expected, result);
@@ -144,7 +141,8 @@ public abstract class AggFunctionTestBase<T, ACC> {
 	}
 
 	@Test
-	public void testMergeReservedAccumulator() throws NoSuchMethodException, InvocationTargetException, IllegalAccessException {
+	public void testMergeReservedAccumulator()
+			throws NoSuchMethodException, InvocationTargetException, IllegalAccessException {
 		AggregateFunction<T, ACC> aggregator = getAggregator();
 		boolean hasMerge = UserDefinedFunctionUtils.ifMethodExistInFunction("merge", aggregator);
 		boolean hasRetract = UserDefinedFunctionUtils.ifMethodExistInFunction("retract", aggregator);
@@ -197,9 +195,8 @@ public abstract class AggFunctionTestBase<T, ACC> {
 			// iterate over input sets
 			for (int i = 0; i < size; ++i) {
 				List<T> inputValues = inputValueSets.get(i);
-				T expected = expectedResults.get(i);
 				ACC acc = accumulateValues(inputValues);
-				resetAccFunc.invoke(aggregator, (Object) acc);
+				resetAccFunc.invoke(aggregator, acc);
 				ACC expectedAcc = aggregator.createAccumulator();
 				//The accumulator after reset should be exactly same as the new accumulator
 				validateResult(expectedAcc, acc);
@@ -208,24 +205,7 @@ public abstract class AggFunctionTestBase<T, ACC> {
 	}
 
 	protected <E> void validateResult(E expected, E result) {
-		if (expected instanceof BigDecimal && result instanceof BigDecimal) {
-			// BigDecimal.equals() value and scale but we are only interested in value.
-			assertEquals(0, ((BigDecimal) expected).compareTo((BigDecimal) result));
-		} else if (expected instanceof MinWithRetractAccumulator &&
-				result instanceof MinWithRetractAccumulator) {
-			MinWithRetractAccumulator e = (MinWithRetractAccumulator) expected;
-			MinWithRetractAccumulator r = (MinWithRetractAccumulator) result;
-			assertEquals(e.min, r.min);
-			assertEquals(e.mapSize, r.mapSize);
-		} else if (expected instanceof MaxWithRetractAccumulator &&
-				result instanceof MaxWithRetractAccumulator) {
-			MaxWithRetractAccumulator e = (MaxWithRetractAccumulator) expected;
-			MaxWithRetractAccumulator r = (MaxWithRetractAccumulator) result;
-			assertEquals(e.max, r.max);
-			assertEquals(e.mapSize, r.mapSize);
-		} else {
-			assertEquals(expected, result);
-		}
+		assertEquals(expected, result);
 	}
 
 	protected ACC accumulateValues(List<T> values)
@@ -235,9 +215,9 @@ public abstract class AggFunctionTestBase<T, ACC> {
 		Method accumulateFunc = getAccumulateFunc();
 		for (T value : values) {
 			if (accumulateFunc.getParameterCount() == 1) {
-				accumulateFunc.invoke(aggregator, (Object) accumulator);
+				accumulateFunc.invoke(aggregator, accumulator);
 			} else if (accumulateFunc.getParameterCount() == 2) {
-				accumulateFunc.invoke(aggregator, (Object) accumulator, (Object) value);
+				accumulateFunc.invoke(aggregator, accumulator, value);
 			} else {
 				throw new TableException("Unsupported now");
 			}
@@ -251,9 +231,9 @@ public abstract class AggFunctionTestBase<T, ACC> {
 		Method retractFunc = getRetractFunc();
 		for (T value : values) {
 			if (retractFunc.getParameterCount() == 1) {
-				retractFunc.invoke(aggregator, (Object) accumulator);
+				retractFunc.invoke(aggregator, accumulator);
 			} else if (retractFunc.getParameterCount() == 2) {
-				retractFunc.invoke(aggregator, (Object) accumulator, (Object) value);
+				retractFunc.invoke(aggregator, accumulator, value);
 			} else {
 				throw new TableException("Unsupported now");
 			}

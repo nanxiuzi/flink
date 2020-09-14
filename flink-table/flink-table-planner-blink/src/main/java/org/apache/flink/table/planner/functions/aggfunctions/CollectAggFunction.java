@@ -18,34 +18,62 @@
 
 package org.apache.flink.table.planner.functions.aggfunctions;
 
-import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.apache.flink.api.common.typeinfo.Types;
-import org.apache.flink.api.java.typeutils.MapTypeInfo;
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.dataview.MapView;
-import org.apache.flink.table.functions.AggregateFunction;
+import org.apache.flink.table.data.GenericMapData;
+import org.apache.flink.table.data.MapData;
+import org.apache.flink.table.types.DataType;
+import org.apache.flink.table.types.logical.LogicalType;
 
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 
+import static org.apache.flink.table.types.utils.DataTypeUtils.toInternalDataType;
+
 /**
- * Aggregate function for COLLECT.
- * @param <T> type of collect element.
+ * Built-in COLLECT aggregate function.
  */
-public class CollectAggFunction<T>
-	extends AggregateFunction<Map<T, Integer>, CollectAggFunction.CollectAccumulator<T>> {
+@Internal
+public final class CollectAggFunction<T>
+		extends InternalAggregateFunction<MapData, CollectAggFunction.CollectAccumulator<T>> {
 
 	private static final long serialVersionUID = -5860934997657147836L;
 
-	private final TypeInformation<T> elementType;
+	private transient DataType elementDataType;
 
-	public CollectAggFunction(TypeInformation<T> elementType) {
-		this.elementType = elementType;
+	public CollectAggFunction(LogicalType elementType) {
+		this.elementDataType = toInternalDataType(elementType);
 	}
 
-	/** The initial accumulator for Collect aggregate function. */
+	// --------------------------------------------------------------------------------------------
+	// Planning
+	// --------------------------------------------------------------------------------------------
+
+	@Override
+	public DataType[] getInputDataTypes() {
+		return new DataType[]{elementDataType};
+	}
+
+	@Override
+	public DataType getAccumulatorDataType() {
+		return DataTypes.STRUCTURED(
+			CollectAccumulator.class,
+			DataTypes.FIELD("map", MapView.newMapViewDataType(elementDataType.notNull(), DataTypes.INT())));
+	}
+
+	@Override
+	public DataType getOutputDataType() {
+		return DataTypes.MULTISET(elementDataType).bridgedTo(MapData.class);
+	}
+
+	// --------------------------------------------------------------------------------------------
+	// Runtime
+	// --------------------------------------------------------------------------------------------
+
+	/** Accumulator for COLLECT. */
 	public static class CollectAccumulator<T> {
-		public MapView<T, Integer> map = null;
+		public MapView<T, Integer> map;
 
 		@Override
 		public boolean equals(Object o) {
@@ -61,8 +89,8 @@ public class CollectAggFunction<T>
 	}
 
 	public CollectAccumulator<T> createAccumulator() {
-		CollectAccumulator<T> acc = new CollectAccumulator<>();
-		acc.map = new MapView<>(elementType, Types.INT);
+		final CollectAccumulator<T> acc = new CollectAccumulator<>();
+		acc.map = new MapView<>();
 		return acc;
 	}
 
@@ -112,20 +140,7 @@ public class CollectAggFunction<T>
 	}
 
 	@Override
-	public Map<T, Integer> getValue(CollectAccumulator<T> accumulator) {
-		Map<T, Integer> result = new HashMap<>();
-		try {
-			for (Map.Entry<T, Integer> entry : accumulator.map.entries()) {
-				result.put(entry.getKey(), entry.getValue());
-			}
-			return result;
-		} catch (Exception e) {
-			throw new RuntimeException(e);
-		}
-	}
-
-	@Override
-	public TypeInformation<Map<T, Integer>> getResultType() {
-		return new MapTypeInfo<>(elementType, Types.INT);
+	public MapData getValue(CollectAccumulator<T> accumulator) {
+		return new GenericMapData(accumulator.map.getMap());
 	}
 }

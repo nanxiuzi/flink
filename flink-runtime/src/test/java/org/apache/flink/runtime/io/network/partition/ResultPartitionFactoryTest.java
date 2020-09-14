@@ -21,9 +21,7 @@ import org.apache.flink.runtime.deployment.ResultPartitionDeploymentDescriptor;
 import org.apache.flink.runtime.io.disk.FileChannelManager;
 import org.apache.flink.runtime.io.disk.FileChannelManagerImpl;
 import org.apache.flink.runtime.io.network.buffer.NetworkBufferPool;
-import org.apache.flink.runtime.jobgraph.IntermediateDataSetID;
-import org.apache.flink.runtime.jobgraph.IntermediateResultPartitionID;
-import org.apache.flink.runtime.shuffle.PartitionDescriptor;
+import org.apache.flink.runtime.shuffle.PartitionDescriptorBuilder;
 import org.apache.flink.runtime.util.EnvironmentInformation;
 import org.apache.flink.runtime.util.NettyShuffleDescriptorBuilder;
 import org.apache.flink.util.TestLogger;
@@ -35,8 +33,10 @@ import org.junit.Test;
 import java.util.Arrays;
 
 import static org.hamcrest.CoreMatchers.instanceOf;
-import static org.hamcrest.CoreMatchers.not;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 /**
  * Tests for the {@link ResultPartitionFactory}.
@@ -61,59 +61,65 @@ public class ResultPartitionFactoryTest extends TestLogger {
 
 	@Test
 	public void testBoundedBlockingSubpartitionsCreated() {
-		final ResultPartition resultPartition = createResultPartition(false, ResultPartitionType.BLOCKING);
+		final ResultPartition resultPartition = createResultPartition(ResultPartitionType.BLOCKING);
 		Arrays.stream(resultPartition.subpartitions).forEach(sp -> assertThat(sp, instanceOf(BoundedBlockingSubpartition.class)));
 	}
 
 	@Test
 	public void testPipelinedSubpartitionsCreated() {
-		final ResultPartition resultPartition = createResultPartition(false, ResultPartitionType.PIPELINED);
+		final ResultPartition resultPartition = createResultPartition(ResultPartitionType.PIPELINED);
 		Arrays.stream(resultPartition.subpartitions).forEach(sp -> assertThat(sp, instanceOf(PipelinedSubpartition.class)));
 	}
 
 	@Test
-	public void testConsumptionOnReleaseForced() {
-		final ResultPartition resultPartition = createResultPartition(true, ResultPartitionType.BLOCKING);
-		assertThat(resultPartition, instanceOf(ReleaseOnConsumptionResultPartition.class));
+	public void testConsumptionOnReleaseForPipelined() {
+		final ResultPartition resultPartition = createResultPartition(ResultPartitionType.PIPELINED);
+
+		resultPartition.onConsumedSubpartition(0);
+
+		assertTrue(resultPartition.isReleased());
 	}
 
 	@Test
-	public void testConsumptionOnReleaseEnabledForNonBlocking() {
-		final ResultPartition resultPartition = createResultPartition(false, ResultPartitionType.PIPELINED);
-		assertThat(resultPartition, instanceOf(ReleaseOnConsumptionResultPartition.class));
+	public void testNoConsumptionOnReleaseForBlocking() {
+		final ResultPartition resultPartition = createResultPartition(ResultPartitionType.BLOCKING);
+
+		resultPartition.onConsumedSubpartition(0);
+
+		assertFalse(resultPartition.isReleased());
 	}
 
-	@Test
-	public void testConsumptionOnReleaseDisabled() {
-		final ResultPartition resultPartition = createResultPartition(false, ResultPartitionType.BLOCKING);
-		assertThat(resultPartition, not(instanceOf(ReleaseOnConsumptionResultPartition.class)));
-	}
+	private static ResultPartition createResultPartition(ResultPartitionType partitionType) {
+		final ResultPartitionManager manager = new ResultPartitionManager();
 
-	private static ResultPartition createResultPartition(
-			boolean releasePartitionOnConsumption,
-			ResultPartitionType partitionType) {
-		ResultPartitionFactory factory = new ResultPartitionFactory(
-			new ResultPartitionManager(),
+		final ResultPartitionFactory factory = new ResultPartitionFactory(
+			manager,
 			fileChannelManager,
-			new NetworkBufferPool(1, SEGMENT_SIZE, 1),
+			new NetworkBufferPool(1, SEGMENT_SIZE),
 			BoundedBlockingSubpartitionType.AUTO,
 			1,
 			1,
 			SEGMENT_SIZE,
-			releasePartitionOnConsumption);
+			false,
+			"LZ4",
+			Integer.MAX_VALUE);
 
 		final ResultPartitionDeploymentDescriptor descriptor = new ResultPartitionDeploymentDescriptor(
-			new PartitionDescriptor(
-				new IntermediateDataSetID(),
-				new IntermediateResultPartitionID(),
-				partitionType,
-				1,
-				0),
+			PartitionDescriptorBuilder
+				.newBuilder()
+				.setPartitionType(partitionType)
+				.build(),
 			NettyShuffleDescriptorBuilder.newBuilder().buildLocal(),
 			1,
 			true
 		);
 
-		return factory.create("test", descriptor);
+		// guard our test assumptions
+		assertEquals(1, descriptor.getNumberOfSubpartitions());
+
+		final ResultPartition partition =  factory.create("test", 0, descriptor);
+		manager.registerResultPartition(partition);
+
+		return partition;
 	}
 }

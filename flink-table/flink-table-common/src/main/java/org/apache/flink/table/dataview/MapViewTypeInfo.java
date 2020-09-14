@@ -34,6 +34,7 @@ import java.util.Objects;
  * @param <V> value type
  */
 @Internal
+@Deprecated
 public class MapViewTypeInfo<K, V> extends TypeInformation<MapView<K, V>> {
 
 	private static final long serialVersionUID = -2883944144965318259L;
@@ -114,7 +115,7 @@ public class MapViewTypeInfo<K, V> extends TypeInformation<MapView<K, V>> {
 	@Override
 	public TypeSerializer<MapView<K, V>> createSerializer(ExecutionConfig config) {
 		if (nullSerializer) {
-			return (TypeSerializer<MapView<K, V>>) (TypeSerializer<?>) new NullSerializer();
+			return (TypeSerializer<MapView<K, V>>) (TypeSerializer<?>) NullSerializer.INSTANCE;
 		} else {
 			TypeSerializer<K> keySer = keyType.createSerializer(config);
 			TypeSerializer<V> valueSer = valueType.createSerializer(config);

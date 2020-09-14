@@ -76,6 +76,13 @@ public class InputChannelTestUtils {
 		return new SingleInputGateBuilder().setNumberOfChannels(numberOfChannels).build();
 	}
 
+	public static SingleInputGate createSingleInputGate(int numberOfChannels, MemorySegmentProvider segmentProvider) {
+		return new SingleInputGateBuilder()
+			.setNumberOfChannels(numberOfChannels)
+			.setSegmentProvider(segmentProvider)
+			.build();
+	}
+
 	public static ConnectionManager createDummyConnectionManager() throws Exception {
 		final PartitionRequestClient mockClient = mock(PartitionRequestClient.class);
 
@@ -100,7 +107,7 @@ public class InputChannelTestUtils {
 		return InputChannelBuilder.newBuilder()
 			.setChannelIndex(channelIndex)
 			.setPartitionManager(partitionManager)
-			.buildLocalAndSetToGate(inputGate);
+			.buildLocalChannel(inputGate);
 	}
 
 	public static LocalInputChannel createLocalInputChannel(
@@ -113,7 +120,7 @@ public class InputChannelTestUtils {
 			.setPartitionManager(partitionManager)
 			.setInitialBackoff(initialBackoff)
 			.setMaxBackoff(maxBackoff)
-			.buildLocalAndSetToGate(inputGate);
+			.buildLocalChannel(inputGate);
 	}
 
 	public static RemoteInputChannel createRemoteInputChannel(
@@ -124,18 +131,36 @@ public class InputChannelTestUtils {
 		return InputChannelBuilder.newBuilder()
 			.setChannelIndex(channelIndex)
 			.setConnectionManager(connectionManager)
-			.buildRemoteAndSetToGate(inputGate);
+			.buildRemoteChannel(inputGate);
+	}
+
+	public static RemoteInputChannel createRemoteInputChannel(
+		SingleInputGate inputGate,
+		PartitionRequestClient client) {
+
+		return InputChannelBuilder.newBuilder()
+			.setConnectionManager(mockConnectionManagerWithPartitionRequestClient(client))
+			.buildRemoteChannel(inputGate);
+	}
+
+	public static RemoteInputChannel createRemoteInputChannel(
+		SingleInputGate inputGate,
+		int numExclusiveSegments) {
+
+		return InputChannelBuilder.newBuilder()
+			.setNetworkBuffersPerChannel(numExclusiveSegments)
+			.buildRemoteChannel(inputGate);
 	}
 
 	public static RemoteInputChannel createRemoteInputChannel(
 		SingleInputGate inputGate,
 		PartitionRequestClient client,
-		MemorySegmentProvider memorySegmentProvider) {
+		int numExclusiveSegments) {
 
 		return InputChannelBuilder.newBuilder()
 			.setConnectionManager(mockConnectionManagerWithPartitionRequestClient(client))
-			.setMemorySegmentProvider(memorySegmentProvider)
-			.buildRemoteAndSetToGate(inputGate);
+			.setNetworkBuffersPerChannel(numExclusiveSegments)
+			.buildRemoteChannel(inputGate);
 	}
 
 	public static ConnectionManager mockConnectionManagerWithPartitionRequestClient(PartitionRequestClient client) {
@@ -188,7 +213,7 @@ public class InputChannelTestUtils {
 		}
 
 		@Override
-		public Collection<MemorySegment> requestMemorySegments() {
+		public Collection<MemorySegment> requestMemorySegments(int numberOfSegmentsToRequest) {
 			return Collections.emptyList();
 		}
 
@@ -208,7 +233,7 @@ public class InputChannelTestUtils {
 		}
 
 		@Override
-		public Collection<MemorySegment> requestMemorySegments() {
+		public Collection<MemorySegment> requestMemorySegments(int numberOfSegmentsToRequest) {
 			return Collections.singletonList(MemorySegmentFactory.allocateUnpooledSegment(pageSize));
 		}
 
